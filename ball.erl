@@ -15,4 +15,9 @@ run() ->
 	wxFrame:show(Frame),
 	OnPaint = fun paint/2,
 	wxFrame:connect(Frame, paint, [{callback, OnPaint}]), 
-	Frame.
+	game_loop(Frame).
+
+game_loop(Frame) ->
+	timer:sleep(30),
+	wxFrame:refresh(Frame),
+	game_loop(Frame).
