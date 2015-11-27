@@ -4,28 +4,55 @@
 -include_lib("wx/include/wx.hrl").
 -include_lib("wx/src/wxe.hrl").
 
+-include_lib("eunit/include/eunit.hrl").
+
 -define(GAME_PROCESS_INSTANCE, game_instance).
 -define(UI_PROCESS_INSTANCE, ui_instance).
 
--record(velocity, {x = 2 :: number(), y = 2 :: number()}).
--record(position, {x :: number(), y :: number()}).
--record(ball, {position :: #position{}, geometry :: tuple(), velocity = #velocity{} :: #velocity{}}).
--record(game_state, {ball = #ball{}, bounds = {0, 0, 400, 400}}).
+-define(DEFAULT_BALL_SIZE, 30).
+-define(DEFAULT_BALL_X, 30).
+-define(DEFAULT_BALL_Y, 30).
+-define(DEFAULT_BOUNDS_WIDTH, 320).
+-define(DEFAULT_BOUNDS_HEIGHT, 240).
 
-%% Use a process to manage game state.
-%% Use a process to manage ui.
-%% The ui process should get updates from the game process with the data to draw.
-%% Use another process to update game object position in auto refresh mode.
+-type position() :: {integer(), integer()}. 
+-type velocity() :: {integer(), integer()}.
+-type bounds() :: {integer(), integer(), integer(), integer()}.
+-record(ball, {position :: position(), size :: integer(), velocity = {0, 0} :: velocity()}).
+-record(game_state, {ball :: #ball{}, bounds :: bounds()}).
+
+radius_from_ball_size(Size) -> Size div 2.
+
+generate_ball_geometry(Ball) ->
+	{X, Y} = get_position(Ball),
+	Size = get_size(Ball),
+	Radius = radius_from_ball_size(Size),
+	create_circle(X+Radius, Y+Radius, Radius).
 
 create_circle(X, Y, Radius) ->
 	{circle, X, Y, Radius}.
 
-create_velocity(VelX, VelY) -> #velocity{x = VelX, y = VelY}.
+create_rectangle(X, Y, Width, Height) ->
+	{rectangle, X, Y, Width, Height}.
 
-create_ball(X, Y, Radius) -> #ball{geometry = create_circle(X, Y, Radius)}. 
+create_position(X, Y) -> {X, Y}.  
+
+create_velocity(XComponent, YComponent) -> {XComponent, YComponent}.
+
+create_ball(X, Y, Size) -> 
+	#ball{position = create_position(X, Y), size = Size, velocity = create_velocity(1,1)}. 
+
+create_bounds(Width, Height) -> {0, 0, Width, Height}.	
 
 create_game_state() ->
-	#game_state{ball = create_ball(0, 0, 30)}.
+	Ball = create_ball(?DEFAULT_BALL_X, ?DEFAULT_BALL_Y, ?DEFAULT_BALL_SIZE),
+	Velocity = create_velocity(1, 1),
+	BallWithVelocity = set_velocity(Velocity, Ball),
+	Bounds = create_bounds(?DEFAULT_BOUNDS_WIDTH, ?DEFAULT_BOUNDS_HEIGHT),
+	create_game_state(BallWithVelocity, Bounds).
+
+create_game_state(Ball, Bounds) ->
+	#game_state{ball = Ball, bounds = Bounds}.
 
 start() ->
 	GamePid = spawn(fun init/0),
@@ -35,15 +62,10 @@ init() ->
 	GameState = create_game_state(),
 	loop(GameState).
 
-update_width(Fun, {X, Y, Width, Height}) ->
-	{X, Y, Fun(Width), Height}.
+%% Ball record manipulation.
+get_size(#ball{size = Size}) -> Size.
 
-update_height(Fun, {X, Y, Width, Height}) ->
-	{X, Y, Width, Fun(Height)}.
-
-get_geometry(#ball{geometry = Geometry }) -> Geometry.
-
-set_geometry(Geometry, Ball = #ball{}) -> Ball#ball{geometry = Geometry}.
+set_size(Size, Ball = #ball{}) -> Ball#ball{size = Size}.
 
 get_position(#ball{position = Position}) -> Position.
 
@@ -53,94 +75,114 @@ get_velocity(#ball{velocity = Velocity}) -> Velocity.
 
 set_velocity(Velocity, Ball = #ball{}) -> Ball#ball{velocity = Velocity}.
 
+set_ball_x_position(X, Ball = #ball{}) -> 
+	{_, Y} = get_position(Ball),
+	set_position({X, Y}, Ball).
+
+set_ball_y_position(Y, Ball = #ball{}) ->
+	{X, _} = get_position(Ball),
+	set_position({X, Y}, Ball).
+
+%% Game state manipuation.
 get_ball(#game_state{ball = Ball}) -> Ball.
 
-set_ball(Ball, GameState) -> GameState#game_state{ball = Ball}.
+set_ball(Ball, GameState = #game_state{}) -> GameState#game_state{ball = Ball}.
 
 get_bounds(#game_state{bounds = Bounds}) -> Bounds.
 
 set_bounds(Bounds, GameState) -> GameState#game_state{bounds = Bounds}.
 
-add1(X) -> X + 1.
+calculate_next_ball_position(Ball) ->
+	{XPosition, YPosition} = get_position(Ball),
+	{XVelocity, YVelocity} = get_velocity(Ball),
+	{XPosition + XVelocity, YPosition + YVelocity}.
 
-update_geometry_position({circle, X, Y, Radius}, Velocity = #velocity{x = VelX, y = VelY}) ->
-	{circle, X + VelX, Y + VelY, Radius}.
+calculate_ball_bounds(Ball) ->
+	{X, Y} = get_position(Ball),
+	Size = get_size(Ball),
+	{X, Y, X+Size, Y+Size}.
 
-set_geometry_x_coordinate(NewX, {circle, _X, Y, Radius}) -> {circle, NewX, Y, Radius}.
-set_geometry_y_coordinate(NewY, {circle, X, _Y, Radius}) ->  {circle, X, NewY, Radius}.
+is_inside_bounds({X0, Y0, X1, Y1}, {LimitX0, LimitY0, LimitX1, LimitY1}) ->
+	(X0 >= LimitX0) andalso (X1 =< LimitX1) andalso (Y0 >= LimitY0) andalso (Y1 =< LimitY1).
 
-move_x(Fun, {circle, X, Y, Radius}) ->
-	{circle, Fun(X), Y, Radius}.
+update_ball_position_and_velocity(Ball, Bounds) ->
+	Position = calculate_next_ball_position(Ball),
+	NewBall = set_position(Position, Ball), 
+	NewBounds = calculate_ball_bounds(NewBall),
+	case is_inside_bounds(NewBounds, Bounds) of
+		true -> NewBall;
+		false -> fix_ball_out_of_bounds(NewBall, Bounds) 
+	end.
 
-move_y(Fun, {circle, X, Y, Radius}) ->
-	{circle, X, Fun(Y), Radius}.
-
-update_object(Ball = #ball{}) ->
-	Geometry = get_geometry(Ball),
+reverse_ball_velocity_x_component(Ball) ->
 	Velocity = get_velocity(Ball),
-	UpdatedGeometry = update_geometry_position(Geometry, Velocity),
-	set_geometry(UpdatedGeometry, Ball).	
+	UpdatedVelocity = reverse_velocity_x_component(Velocity),
+	set_velocity(UpdatedVelocity, Ball).
 
-reverse_x_component(Velocity = #velocity{x = X}) ->
-	Velocity#velocity{x = -X}.
+reverse_ball_velocity_y_component(Ball) ->
+	Velocity = get_velocity(Ball),
+	UpdatedVelocity = reverse_velocity_y_component(Velocity),
+	set_velocity(UpdatedVelocity, Ball).
 
-reverse_y_component(Velocity = #velocity{y = Y}) ->
-	Velocity#velocity{y = -Y}.
+reverse_velocity_x_component({X, Y}) -> {-X, Y}.
 
-fix_out_of_bounds_left(GameState) ->
-	{BoundsX0, BoundsY0, BoundsX1, BoundsY1} = get_bounds(GameState), 
-	{BallX0, BallY0, BallX1, BallY1} = get_ball_bounds(get_ball(GameState)), 
-	Ball = get_ball(GameState),
-	if
-		BallX0 < BoundsX0 ->
-			Velocity = get_velocity(Ball),
-			UpdatedVelocity = reverse_x_component(Velocity),
-			UpdatedBall = set_velocity(UpdatedVelocity, Ball),
-			Geometry = get_geometry(UpdatedBall),
-			UpdatedGeometry = set_geometry_x_coordinate(BoundsX0+15, Geometry),
-			set_ball(set_geometry(UpdatedGeometry, UpdatedBall), GameState);
-		true -> GameState
+reverse_velocity_y_component({X, Y}) -> {X, -Y}.
+
+%% @todo: DRY
+fix_ball_out_of_bounds_up(Ball, {_LimitX0, LimitY0, _LimitX1, _LimitY1}) ->
+	{_, Y0, _, _} = calculate_ball_bounds(Ball),
+	case Y0 < LimitY0 of
+		true -> UpdatedBallPosition = set_ball_y_position(LimitY0, Ball),
+		      	UpdatedBallVelocity = reverse_ball_velocity_y_component(UpdatedBallPosition),
+			UpdatedBallVelocity;
+		false -> Ball
 	end.
 
-fix_out_of_bounds_right(GameState) ->
-	{BoundsX0, BoundsY0, BoundsX1, BoundsY1} = get_bounds(GameState), 
-	{BallX0, BallY0, BallX1, BallY1} = get_ball_bounds(get_ball(GameState)), 
-	Ball = get_ball(GameState),
-	if
-		BallX1 > BoundsX1 ->
-			Velocity = get_velocity(Ball),
-			UpdatedVelocity = reverse_x_component(Velocity),
-			UpdatedBall = set_velocity(UpdatedVelocity, Ball),
-			Geometry = get_geometry(UpdatedBall),
-			UpdatedGeometry = set_geometry_x_coordinate(BoundsX1 - 15, Geometry),
-			set_ball(set_geometry(UpdatedGeometry, UpdatedBall), GameState);
-		true -> GameState
+fix_ball_out_of_bounds_left(Ball, {LimitX0, _LimitY0, _LimitX1, _LimitY1}) ->
+	{X0, _, _, _} = calculate_ball_bounds(Ball),
+	case X0 < LimitX0 of
+		true -> UpdatedBallPosition = set_ball_x_position(LimitX0, Ball),
+		      	UpdatedBallVelocity = reverse_ball_velocity_x_component(UpdatedBallPosition),
+			UpdatedBallVelocity;
+		false -> Ball
 	end.
 
-fix_out_of_bounds_up(GameState) ->
-	GameState.
+fix_ball_out_of_bounds_right(Ball, {_LimitX0, _LimitY0, LimitX1, _LimitY1}) ->
+	{_, _, X1, _} = calculate_ball_bounds(Ball),
+	case X1 > LimitX1 of
+		true -> UpdatedBallPosition = set_ball_x_position(LimitX1-get_size(Ball), Ball),
+		      	UpdatedBallVelocity = reverse_ball_velocity_x_component(UpdatedBallPosition),
+			UpdatedBallVelocity;
+		false -> Ball
+	end.
 
-fix_out_of_bounds_down(GameState) ->
-	GameState.
+fix_ball_out_of_bounds_down(Ball, {_LimitX0, _LimitY0, _LimitX1, LimitY1}) ->
+	{_, _, _, Y1} = calculate_ball_bounds(Ball),
+	case Y1 > LimitY1 of
+		true -> UpdatedBallPosition = set_ball_y_position(LimitY1-get_size(Ball), Ball),
+		      	UpdatedBallVelocity = reverse_ball_velocity_y_component(UpdatedBallPosition),
+			UpdatedBallVelocity;
+		false -> Ball
+	end.
 
-fix_out_of_bounds(GameState) ->
-	UpdatedState1 = fix_out_of_bounds_left(GameState),
-	UpdatedState2 = fix_out_of_bounds_up(UpdatedState1),
-        UpdatedState3 = fix_out_of_bounds_right(UpdatedState2),
-	UpdatedState4 = fix_out_of_bounds_down(UpdatedState3).
-
-get_ball_bounds(Ball) ->
-	{circle, X, Y, Radius} = get_geometry(Ball),
-	{X - Radius, Y - Radius, X + Radius, Y + Radius}.
+fix_ball_out_of_bounds(Ball, Bounds) ->
+	UpdatedBall1 = fix_ball_out_of_bounds_right(Ball, Bounds),
+	UpdatedBall2 = fix_ball_out_of_bounds_down(UpdatedBall1, Bounds),
+	UpdatedBall3 = fix_ball_out_of_bounds_left(UpdatedBall2, Bounds),
+	UpdatedBall4 = fix_ball_out_of_bounds_up(UpdatedBall3, Bounds),
+	UpdatedBall4.
 
 update_game_state(GameState) ->
 	Ball = get_ball(GameState),
-	UpdatedBall = update_object(Ball),
+	Bounds = get_bounds(GameState),
+	UpdatedBall = update_ball_position_and_velocity(Ball, Bounds),
 	UpdatedGameState = set_ball(UpdatedBall, GameState),
-	fix_out_of_bounds(UpdatedGameState).
+	UpdatedGameState.
 
-ui_draw(DC, {circle, X, Y, Radius}) ->
-	wxPaintDC:drawCircle(DC, {X, Y}, Radius). 
+ui_draw_geometry(DC, {circle, X, Y, Radius}) ->
+	wxPaintDC:drawCircle(DC, {X, Y}, Radius);
+ui_draw_geometry(DC, {rectangle, X, Y, Width, Height}) ->
+	wxPaintDC:drawRectangle(DC, {X, Y}, {Width, Height}).
 
 % @todo: A client should register to get game state updates. Invert update control.
 loop(State) ->
@@ -154,14 +196,19 @@ loop(State) ->
 		end,
 	loop(UpdatedState).
 
-paint(Wx = #wx{obj=Obj}, WxRef) ->
+bounds_to_rectangle({X0, Y0, X1, Y1}) ->
+	{rectangle, X0, Y0, X1, Y1}.  
+
+paint(#wx{obj=Obj}, _WxRef) ->
 	DC = wxPaintDC:new(Obj),
 	?GAME_PROCESS_INSTANCE ! {self(), get_state},
 	receive
-		{From, State} -> 
+		{_From, State} -> 
 			Ball = get_ball(State),
-			Geometry = get_geometry(Ball),
-			ui_draw(DC, Geometry)
+			BallGeometry = generate_ball_geometry(Ball),
+			BoundsRectangle = bounds_to_rectangle(get_bounds(State)),
+			ui_draw_geometry(DC, BoundsRectangle),
+			ui_draw_geometry(DC, BallGeometry)
 	end.
 
 run() ->
@@ -180,3 +227,13 @@ game_loop(Frame) ->
 repaint(Frame) ->
 	wxFrame:refresh(Frame).
 
+%should_update_ball_position_when_out_of_bounds_test() ->
+%	BallSize = ?DEFAULT_BALL_SIZE,
+%	Ball = create_ball(120, 0, BallSize),
+%	Bounds = create_bounds(0, 0, 100, 100),
+%	GameState = create_game_state(Ball), 
+%	UpdatedGameState = set_bounds(Bounds, GameState),
+%	FinalGameState = fix_ball_out_of_bounds_right(UpdatedGameState),
+%	Position = get_position(Ball), 
+%	?assertEqual({100-BallSize div 2, 0}, Position).
+	
