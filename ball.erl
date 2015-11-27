@@ -17,8 +17,8 @@ start() ->
 	register(?GAME_PROCESS_INSTANCE, GamePid).
 
 init() ->
-	Rectangle = {10, 10, 100, 100},
-	loop(Rectangle).
+	Object = {circle, 10, 10, 30},
+	loop(Object).
 
 update_width(Fun, {X, Y, Width, Height}) ->
 	{X, Y, Fun(Width), Height}.	
@@ -28,17 +28,26 @@ update_height(Fun, {X, Y, Width, Height}) ->
 
 add1(X) -> X + 1.
 
-update_rectangle(Rectangle) ->
-	update_height(fun add1/1, update_width(fun add1/1, Rectangle)).
+move_x(Fun, {circle, X, Y, Radius}) ->
+	{circle, Fun(X), Y, Radius}.
 
+move_y(Fun, {circle, X, Y, Radius}) ->
+	{circle, X, Fun(Y), Radius}.
+
+update_object({circle, X, Y, Radius}) ->
+	move_x(fun add1/1, move_y(fun add1/1, {circle, X, Y, Radius})).
+
+ui_draw(DC, {circle, X, Y, Radius}) ->
+	wxPaintDC:drawCircle(DC, {X, Y}, Radius). 
+
+% @todo: A client should register to get game state updates.
 loop(State) ->
 	UpdatedState = receive
 		{From, get_state} ->
-			io:format("get_state called from : ~p~n", [From]), 	       
 			From ! {self(), State},
 			State
 		after 30 ->
-			update_rectangle(State)
+			update_object(State)
 		end,
 	loop(UpdatedState).
 
@@ -46,8 +55,7 @@ paint(Wx = #wx{obj=Obj}, WxRef) ->
 	DC = wxPaintDC:new(Obj),
 	?GAME_PROCESS_INSTANCE ! {self(), get_state},
 	receive
-		{From, Rectangle} -> io:format("Received ~p~n", [Rectangle]),
-		wxPaintDC:drawRectangle(DC, Rectangle)
+		{From, State} -> ui_draw(DC, State)
 	end.
 
 run() ->
