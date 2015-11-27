@@ -10,6 +10,7 @@
 -record(velocity, {x = 1 :: number(), y = 1 :: number()}).
 -record(position, {x :: number(), y :: number()}).
 -record(ball, {position :: #position{}, geometry :: tuple(), velocity = #velocity{} :: #velocity{}}).
+-record(game_state, {ball = #ball{}, bounds = {0, 0, 640, 480}}).
 
 %% Use a process to manage game state.
 %% Use a process to manage ui.
@@ -23,13 +24,16 @@ create_velocity(VelX, VelY) -> #velocity{x = VelX, y = VelY}.
 
 create_ball(X, Y, Radius) -> #ball{geometry = create_circle(X, Y, Radius)}. 
 
+create_game_state() ->
+	#game_state{ball = create_ball(0, 0, 30)}.
+
 start() ->
 	GamePid = spawn(fun init/0),
 	register(?GAME_PROCESS_INSTANCE, GamePid).
 
 init() ->
-	Object = create_ball(0, 0, 30),
-	loop(Object).
+	GameState = create_game_state(),
+	loop(GameState).
 
 update_width(Fun, {X, Y, Width, Height}) ->
 	{X, Y, Fun(Width), Height}.
@@ -49,6 +53,14 @@ get_velocity(#ball{velocity = Velocity}) -> Velocity.
 
 set_velocity(Velocity, Ball = #ball{}) -> Ball#ball{velocity = Velocity}.
 
+get_ball(#game_state{ball = Ball}) -> Ball.
+
+set_ball(Ball, GameState) -> GameState#game_state{ball = Ball}.
+
+get_bounds(#game_state{bounds = Bounds}) -> Bounds.
+
+set_bounds(Bounds, GameState) -> GameState#game_state{bounds = Bounds}.
+
 add1(X) -> X + 1.
 
 update_geometry_position({circle, X, Y, Radius}, Velocity = #velocity{x = VelX, y = VelY}) ->
@@ -66,17 +78,22 @@ update_object(Ball = #ball{}) ->
 	UpdatedGeometry = update_geometry_position(Geometry, Velocity),
 	set_geometry(UpdatedGeometry, Ball).	
 
+update_game_state(GameState) ->
+	Ball = get_ball(GameState),
+	UpdatedBall = update_object(Ball),
+	set_ball(UpdatedBall, GameState).
+
 ui_draw(DC, {circle, X, Y, Radius}) ->
 	wxPaintDC:drawCircle(DC, {X, Y}, Radius). 
 
-% @todo: A client should register to get game state updates.
+% @todo: A client should register to get game state updates. Invert update control.
 loop(State) ->
 	UpdatedState = receive
 		{From, get_state} ->
 			From ! {self(), State},
 			State
 		after 30 ->
-			update_object(State)
+			update_game_state(State)
 		end,
 	loop(UpdatedState).
 
@@ -85,7 +102,8 @@ paint(Wx = #wx{obj=Obj}, WxRef) ->
 	?GAME_PROCESS_INSTANCE ! {self(), get_state},
 	receive
 		{From, State} -> 
-			Geometry = get_geometry(State),
+			Ball = get_ball(State),
+			Geometry = get_geometry(Ball),
 			ui_draw(DC, Geometry)
 	end.
 
