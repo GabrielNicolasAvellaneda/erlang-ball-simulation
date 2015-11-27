@@ -4,8 +4,10 @@
 -include_lib("wx/include/wx.hrl").
 -include_lib("wx/src/wxe.hrl").
 
-paint(#wx{}, #wx_ref{}) ->
-	io:format("Received paint event~n").
+paint(Wx = #wx{obj=Obj}, WxRef) ->
+	DC = wxPaintDC:new(Obj),
+	wxPaintDC:drawRectangle(DC, {10, 10, 100, 100}),
+	io:format("Received paint event ~p ~p~p~n", [Wx, WxRef, DC]).
 
 run() ->
 	Wx = wx:new(),
